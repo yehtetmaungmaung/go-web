@@ -115,3 +115,57 @@ func snippetCreate(w http.ResponseWriter, r *http.Request) {
     w.Write([]byte("Create a new snippet..."))
 }
 ```
+> **Hint:** Complete list of the net/http package's constants [here](https://pkg.go.dev/net/http/#pkg-constants).
+
+## System-generated headers and content sniffing
+When sending a response, Go will automatically set three system-genereated headers for you:
+- `Date`
+- `Content-Length`
+- `Content-Type`
+
+Go will attempt to set the correct `Content-Type` header for you by content sniffing the response body with the [http.DetectContentType()](https://pkg.go.dev/net/http/#DetectContentType) function. If this function can't guess the content type, Go will fall back to setting the header to `Content-Type: application/octet-stream` instead.
+
+
+>It can't distinguish JSON from plain text. So, by defaut, JSON responses will be sent with a `Content-Type: text/plain; charset=utf-8` header. You can prevent this from happening by settting the correct header manually like so:
+```
+w.Header().Set("Content-Type", "application/json")
+w.Write([]byte(`{"name": "Alex"}`))
+```
+## Manipulating the header map
+We used `w.Header().Set()` to add new header to the response header map. You can also use `Add()`, `Del()`, `Get()`, `Values()` methods to read and manipulate the header map.
+```
+// Set a new cache-control header. If an existing "Cache-Control" header exists
+// it will be overwritten.
+w.Header().Set("Cache-Control", "public, max-age=31536000")
+// In contrast, the Add() method appends a new "Cache-Control" header and can
+// be called multiple times.
+w.Header().Add("Cache-Control", "public")
+w.Header().Add("Cache-Control", "max-age=31536000")
+// Delete all values for the "Cache-Control" header.
+w.Header().Del("Cache-Control")
+// Retrieve the first value for the "Cache-Control" header.
+w.Header().Get("Cache-Control")
+// Retrieve a slice of all values for the "Cache-Control" header.
+w.Header().Values("Cache-Control")
+```
+
+## URL query strings
+/snippet/view?id=2
+
+```
+func snippetView(w http.ResponseWriter, r *http.Request) {
+    // Extract the value of the id parameter from the query string and try to
+    // convert it to an integer using the strconv.Atoi() function. IF it can't 
+    // be converted to an integerr, or the value is less than 1, we return a
+    // 404 page not found response.
+    id, err := strconv.Atoi(r.URL.Query().Get("id))
+    if err != nil || id < 1 {
+        htt.NotFound(w, r)
+        return
+    }
+
+    // Use the fmt.Fprintf() function to interpolate the id value with our response
+    // and write it to the http.ResponseWriter.
+    fmt.Fprintf(w, "Display a specific snippet with ID %d...", id)
+
+```
