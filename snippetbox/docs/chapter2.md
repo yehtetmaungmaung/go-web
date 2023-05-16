@@ -47,3 +47,6 @@ mux.HandleFunc("foo.example.org/", fooHandler)
 
 > `servemux` doesn't support routing based on the request method, it doesn't support clean URLs with variables in them, and it doesn't support regexp-based patterns.
 
+## Customizing HTTP headers
+
+
