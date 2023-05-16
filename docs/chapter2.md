@@ -83,7 +83,7 @@ func snippetCreate(w httpResponseWriter, r *http.Request) {
     w.Write([]byte("Create a new snippet..."))
 }
 ```
-> **Important:**  Changing the response header map after a call to w.WriteHeader() or w.Write() will have no effect on the headers that the user receives. You need to make sure that your response header map contains all the headers you want before you call these methods.
+> **Important:**  Changing the response header map after a call to `w.WriteHeader()` or `w.Write()` will have no effect on the headers that the user receives. You need to make sure that your response header map contains all the headers you want before you call these methods.
 
 ## the `http.Error` shortcut
 If you want to send a non-200 status code and a plain text response body, it's a good opportunity to use the `http.Error()` shortcut. It's a lightweight helper function which takes a given message and status code, then calls the `w.WriteHeader()` and `w.Write()` methods behind-the-scenes for us.
@@ -101,3 +101,17 @@ func snippetCreate(w http.ResponseWriter, r *http.Request) {
 }
 ```
 > The pattern of passing `http.ResponseWriter` to other functions is super common in Go. In practice, it's quite rare to use the `w.Write()` and `w.WriteHeader()` methods directly.
+
+## The `net/http` constants
+- `http.MethodPost` instead of the string `"POST"`
+- `http.StatusMethodNotAllowed` instead of the integer `405`
+```
+func snippetCreate(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        w.Header().set("Allow", http.MethodPost)
+        http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    w.Write([]byte("Create a new snippet..."))
+}
+```
