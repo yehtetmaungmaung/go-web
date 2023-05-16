@@ -48,5 +48,40 @@ mux.HandleFunc("foo.example.org/", fooHandler)
 > `servemux` doesn't support routing based on the request method, it doesn't support clean URLs with variables in them, and it doesn't support regexp-based patterns.
 
 ## Customizing HTTP headers
+```
+func snippetCreate(w http.ResponseWriter, r *http.Request) {
+    // Use r.Method to check whether the request is using POST or not.
+    if r.Method != "POST" {
+        // If it's not, use the w.WriteHeader() method to send a 405 status
+        // code and the w.Write() method to write a "Method Not Allowed"
+        // response body. We then return from the function so that the
+        // subsequent code is not executed.
+        w.WriteHeader(405)
+        w.Write([]byte("Method Not Allowed"))
+        return
+    }
+    w.Write([]byte("Create a new snippet..."))
+}
+```
+* It's only possible to call `w.WriteHeader()` Once per response, and after the status code has been written, it can't be changed. If you try to call `w.WriteHeader()` second time, Go will log a warning message.
+* If you don't call `w.WriteHeader()` explicitly, then the first call to `w.Write()` will automatically send a `200 OK` status code to the user. So, if you want to send a non-200 status code, you must call `w.WriteHeader()` before any call to `w.Write()`.
 
+## `Allow` header 
+Let the user know which request methods are supported for that particular URL.
+
+```
+func snippetCreate(w httpResponseWriter, r *http.Request) {
+    if r.Method != "POST" {
+        // Use the Header().Set() method to add an 'Allow: POST' header to the
+        // response header map. The first parameter is teh header name, and
+        // the second parameter is the header value.
+        w.Header().Set("Allow", "POST")
+        w.WriteHeader(405)
+        w.Write([]byte("Method Not Allowed"))
+        return
+    }
+    w.Write([]byte("Create a new snippet..."))
+}
+```
+> **Important:**  Changing the response header map after a call to w.WriteHeader() or w.Write() will have no effect on the headers that the user receives. You need to make sure that your response header map contains all the headers you want before you call these methods.
 
