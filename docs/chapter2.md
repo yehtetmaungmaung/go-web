@@ -167,5 +167,151 @@ func snippetView(w http.ResponseWriter, r *http.Request) {
     // Use the fmt.Fprintf() function to interpolate the id value with our response
     // and write it to the http.ResponseWriter.
     fmt.Fprintf(w, "Display a specific snippet with ID %d...", id)
+}
+```
+
+
+## The io.writer interface
 
 ```
+func Fprintf(w io.Writer, format string, a ...any) (n int, err error)
+```
+
+But we passed it our `http.ResponseWriter` object instead - and it worked fine. We're able to do this because `io.Writer` type is an interface, and the `http.ResponseWriter` object satisfied the interface because it has a `w.Write()` method.
+
+## HTML templating and inheritance
+
+```
+func home(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+    // Initialize a slice containing the paths to the two files. It's important
+    // to note that the file containing our base template must be the *first*
+    // file in the slice.
+	files := []string{
+		"./ui/html/base.tmpl.html",
+		"./ui/html/pages/home.tmpl.html",
+	}
+
+    // Use the template.ParseFiles() functions to read the files and store
+    // templates in a template set. Notice that we can pass the slice of file
+    // paths as a variadic parameter?
+	ts, err := template.ParseFiles(files...)
+	if err != nil {
+		log.Printf(err.Error())
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+    // Use the ExecuteTemplate() method to write the content of the "base"
+    // template as the response. The last parameter to ExecuteTemplate()
+    // represents any dynamic data that we want to pass in. which for now
+    // we'll leave as nil.
+	err = ts.ExecuteTemplate(w, "base", nil)
+	if err != nil {
+		log.Print(err.Error())
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+```
+
+## Serving static files
+`http.FileServer` handler receives a request, it will remove the leading slash from the URL path and then search the `./ui/static` directory for the corresponding file to send to ther user. So, for this to work correctly, we must strip the leading `/static` from the URL path before passing it to the `http.FileServer`.
+```
+func main() {
+	mux := http.NewServeMux()
+
+	// Create a file server which serves files out of the "./ui/static" directory.
+	// Note that the path given to the http.Dir function is relative to the
+	// project directory root.
+	fileServer := http.FileServer(http.Dir("./ui/static/"))
+
+	// Use the mux.Handle() function to register the file server as the handler
+	// for all URL paths that start with "/static/". For matching paths, we strip
+	// the "/static/" prefix before the request the file server.
+	mux.Handle("/static/", http.StripPrefix("/static", fileServer))
+
+	mux.HandleFunc("/", home)
+	mux.HandleFunc("/snippet/view", snippetView)
+	mux.HandleFunc("/snippet/create", snippetCreate)
+
+	log.Println("Starting http server on :4000")
+	err := http.ListenAndServe(":4000", mux)
+	if err != nil {
+		log.Fatalf("Failed to start the server: %s", err)
+	}
+}
+```
+
+## The http.Handler interface
+Handler is an object which satisfied the `http.Handler` interface:
+```
+type Handler interface {
+    ServeHTTP(ResponseWriter, *Request)
+}
+```
+
+So in its simplest form, a handler might look something like this:
+
+```
+type home struct {}
+
+func (h *home) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    w.Write([]byte("This is my home page"))
+}
+```
+
+Here we have an object (in this case it’s a home struct, but it could equally be a string or function or anything else), and we’ve implemented a method with the signature
+`ServeHTTP(http.ResponseWriter, *http.Request)` on it. That’s all we need to make a
+handler. You could then register this with a servemux using the `Handle` method like so:
+
+```
+mux := http.NewServeMux()
+mux.Handler("/", &home{})
+```
+
+When this servemux receives a HTTP request for `"/"`, it will then call `ServeHTTP()` method of the `home` struct - which in turn writes the HTTP response.
+
+## Handler functions
+Now, creating an object just so we can implement a `ServeHTTP()` method on it is long-winded
+and a bit confusing. Which is why in practice it’s far more common to write your handlers as a
+normal function (like we have been so far). For example:
+
+```
+func home(w http.ResponseWriter, r *http.Request) {
+    w.Write([]byte("This is my home page"))
+}
+```
+
+But this `home` function is just a normal function; it doesn't have a `ServeHTTP()` method. So in itself it isn't a handler. Instead we can transform it into a handler using `http.HandlerFunc()` ADAPTER, LIKE SO:
+
+```
+mux := HTTP.NewServeMux()
+mux.Handle("/", http.HandlerFunc(home))
+```
+
+The `http.HandlerFunc()` adapter works by automatically adding a `ServeHTTP()` method to the `home` function. When executed, this `ServeHTTP()` method then simply calls the contents of the original `home` function. It's a roundabout but convenient way of coercing a normal function into satisfying the `http.Handler` interface.
+
+## Chaining handlers
+
+The `http.ListenAndServe()` function takes a `http.Handler` object as the second parameter...
+```
+func ListenAndServe(addr string, handler Handler) error
+```
+.. but we've been passing in a servemux. We were able to do this because the servemux also has a `ServeHTTP()` method, meaning that it too satisfies the `http.Handler` interface.
+
+Thinkof the servemux as just being a special kind of handler, which, instead of providing a response itself, passes the request on to a second handler.
+
+When our server receives a new HTTP request, it calls the servemux's `ServeHTTP()` method. This looks up the relevant handler based on the request URL Path, and in turn calls the handler's `ServeHTTP()` method. You can think of a Go web application as a chain of `ServeHTTP()` methods being called one after another.
+
+
+## Requests are handled concurrently
+There is one more thing that’s really important to point out: all incoming HTTP requests are
+served in their own goroutine. For busy servers, this means it’s very likely that the code in or
+called by your handlers will be running concurrently. While this helps make Go blazingly fast,
+the downside is that you need to be aware of (and protect against) [race conditions](https://www.alexedwards.net/blog/understanding-mutexes) when
+accessing shared resources from your handlers.
+
