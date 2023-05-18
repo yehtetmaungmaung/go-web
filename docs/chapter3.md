@@ -1,6 +1,6 @@
 # Configuration and error handling
 
-> 
+> tar to mhr khun arr, tar lat mhr asone aphyat, tar shay mhr sate dat
 
 ```
 func main() {
@@ -130,3 +130,79 @@ func main() {
 
 }
 ```
+
+## Additional logging methods
+
+We've used the `Println()`, `Printf()`, `Fatal()` methods to write log messages, but Go provides a [range of other methods](https://pkg.go.dev/log/#Logger). As a rule of thumb, you should avoid using the `Panic()` and `Fatal()` variations outside of your `main()` function -- it's good practice to return errors instead, and only panic or exit directly from `main()`.
+
+## Concurrent logging
+
+Custom loggers created by `log.New()` are concurrency-safe. You can share a single logger and use it across multiple goroutines and in your handlers without needing to worrry about race conditions. That said, if you have multiple loggers writing to the same destination then you need to be careful and ensure that the destination's underlying `Write()` method is also safe for concurrent use.
+
+## Dependency injection
+
+Problem: our `handlers.go` file, the `home` handler function is still writing error messges using Go's standard logger, not the `errorLog` logger that we want to be using.
+
+```
+func home(w http.ResponseWriter, r *http.Request) {
+...
+    ts, err := template.ParseFiles(files...)
+    if err != nil {
+        log.Print(err.Error()) // This isn't using our new error logger.
+        http.Error(w, "Internal Server Error", 500)
+        return
+    }
+    err = ts.ExecuteTemplate(w, "base", nil)
+    if err != nil {
+        log.Print(err.Error()) // This isn't using our new error logger.
+        http.Error(w, "Internal Server Error", 500)
+    }
+}
+```
+
+This raises a good question: how can we make our new `errorLog` logger available to our `home` function from `main()`? And this question generalizes further. Most web applications will have multiple dependencies that their handlers need to access, such as a database connection pool, centralized error handlers, and template caches. What we really want to answer is: how can we make any dependency available to our handlers?
+
+There are a [few different ways](https://www.alexedwards.net/blog/organising-database-access) to do this, the simplest being to just put the dependencies in global variables. But in general, it is good practice to inject dependencies into your handlers. It makes your code more explicit, less error-prone and easier to unit test than if you use global variables.
+
+For applications where all you handlers are in the same package, like ours, a neat way to inject dependencies is to put them into a custom `application` struct, and then define your handler functions as methods against `application`.
+
+In `main.go`
+
+```
+// Define an application struct to hold the application-wide dependencies for the web
+// application. For now we'll only include fields for the two custom loggers, but
+// we'll add more to it as the build progresses.
+type application struct {
+    errorLog *log.Logger
+    infoLog *log.Logger
+}
+
+func main() {
+    infoLog := log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime)
+    errorLog := log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Llongfile)
+
+    // Initialize a new instance of our application struct, containing the
+    // dependencies
+    app := &application {
+        errorLog: errorLog,
+        infoLog: infoLog,
+    }
+
+    mux = http.NewServeMux()
+
+    // swap the route declarations to use the application struct's methods
+    // as the handler functions.
+    mux.HandleFunc("/", app.home)
+}
+```
+
+In `handler.go`
+
+```
+// Change the signature of the home handler so it is defined as a method
+// against *application.
+func (app *application) home(w http.ResponseWriter, r *http.Request) {
+    ...
+}
+```
+
