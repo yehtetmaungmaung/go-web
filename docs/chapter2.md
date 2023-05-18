@@ -36,7 +36,7 @@ Because `DefaultServeMux` is a global variable, any package can access it and re
 ## Servemux features and quirks
 * longer URL patterns always take precedence over shorter ones.
 * request URL paths are automatically sanitized. `/foo/bar/..//baz`  =>  `301 Permanent Redirect` to `/foo/baz`
-* if a subtree path has been registerd and a request is received for that subtree path without a trailing slash, then the user will automatically be sent a `301 Permanent Redirect` to the subtree path with the slash added.  `/foo/`  =>  `/foo/`.
+* if a subtree path has been registerd and a request is received for that subtree path without a trailing slash, then the user will automatically be sent a `301 Permanent Redirect` to the subtree path with the slash added.  `/foo`  =>  `/foo/`.
 
 ## Host name matching
 It's possible to include host names in your URL patterns:
@@ -63,7 +63,7 @@ func snippetCreate(w http.ResponseWriter, r *http.Request) {
     w.Write([]byte("Create a new snippet..."))
 }
 ```
-* It's only possible to call `w.WriteHeader()` Once per response, and after the status code has been written, it can't be changed. If you try to call `w.WriteHeader()` second time, Go will log a warning message.
+* It's only possible to call `w.WriteHeader()` once per response, and after the status code has been written, it can't be changed. If you try to call `w.WriteHeader()` second time, Go will log a warning message.
 * If you don't call `w.WriteHeader()` explicitly, then the first call to `w.Write()` will automatically send a `200 OK` status code to the user. So, if you want to send a non-200 status code, you must call `w.WriteHeader()` before any call to `w.Write()`.
 
 ## `Allow` header 
