@@ -1,6 +1,9 @@
 # Configuration and error handling
 
-> tar to mhr khun arr, tar lat mhr asone aphyat, tar shay mhr sate dat
+Day 3, May 18 2023
+> တာတိုမှာ ခွန်အား
+တာလတ်မှာ အဆုံးအဖြတ်
+တာဝေးမှာ စိတ်ဓါတ်
 
 ```
 func main() {
