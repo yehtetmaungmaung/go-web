@@ -206,3 +206,158 @@ func (app *application) home(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+## Additional information
+### Closures for dependency injection
+
+The pattern that we're using to inject dependencies won't work if your handlers are spread across multiple packages. In that case, an alternative approach is to create a `config` package, exporting an `Application` struct and have your handler functions close over this to form a closure.
+
+```
+func main() {
+    app := &config.Application{
+        ErrorLog: log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile)
+    }
+
+    mux.Handle("/", examplePackage.ExampleHandler(app))
+}
+
+func ExampleHandler(app *config.Application) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        ...
+        ts, err := template.ParseFiles(files...)
+        if err != nil {
+            app.ErrorLog.Print(err.Error())
+            http.Error(w, "Internal Server Error", 500)
+            return
+        }
+        ...
+    }
+}
+```
+
+>**INFO:** You can find a complete and more concrete example of how to use the closure pattern in [this Gist](https://gist.github.com/alexedwards/5cd712192b4831058b21).
+
+## Centralized error handling
+
+Let's neaten up our application by moving some of the error handling code into helper methods. This will help [separate our concerns](https://deviq.com/separation-of-concerns/) and stop us repeating code as we progress through the build.
+
+Add a new `helpers.go` file under `cmd/web` directory:
+
+```
+package main
+
+// The serverError helper writes an error messge and stack trace to the errorLog,
+// then sends a generic 500 Internal Server Error response to the user.
+func (app *application) serverError(w http.ResponseWriter, err error) {
+	trace := fmt.Sprintf("%s\n%s", err.Error(), debug.Stack())
+	app.errorLog.Print(trace)
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.statusInternalServerError)
+}
+
+// The clientError helper sends a specific status code and corresponding description
+// to the user. We'll use this later in the book to send responses like 400 "Bad
+// Request" when there's a problem with the request that the user sent.
+func (app *application) clientError(w http.ResponseWriter, status int) {
+	http.Error(w, http.StatusText(status), status)
+}
+
+// For consistency, we'll also implement a notFound helper. This is simply a
+// convenience wrapper around clientError which sends a 404 Not Found response 
+// to the user.
+func (app *application) notFound(w http.ResponseWriter) {
+	app.clientError(w, http.StatusNotFound)
+}
+```
+* In the `serverError()` helper, we used the [debug.Stack()](https://pkg.go.dev/runtime/debug/#Stack) function to get a *stack trace* for the *current goroutine* and append it to the log message.
+* `http.StatusText(400)` will return the string `"Bad Request"`.
+
+In `handlers.go`, update it to use the new helpers:
+
+```
+func (app *application) home(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		app.notFound(w)   // Use the notFound() helper
+		return
+	}
+
+	files := []string{
+		"./ui/html/base.tmpl.html",
+		"./ui/html/partials/nav.tmpl.html",
+		"./ui/html/pages/home.tmpl.html",
+	}
+
+	ts, err := template.ParseFiles(files...)
+	if err != nil {
+		app.errorLog.Printf(err.Error())
+		app.serverError(w, err)     // Use the serverError() helper
+		return
+	}
+
+	err = ts.ExecuteTemplate(w, "base", nil)
+	if err != nil {
+		app.errorLog.Print(err.Error())
+		app.serverError(w, err)  // Use the serverError() helper
+	}
+}
+
+// Add a snippetView handler function
+func (app *application) snippetView(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil || id < 1 {
+		app.notFound(w)  // Use the notFound() helper
+		return
+	}
+
+	fmt.Fprintf(w, "Display a specific snippet with ID %d", id)
+}
+
+// Add a snippetCreate handler function
+func (app *application) snippetCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		app.clientError(w, http.StatusMethodNotAllowed)   // Use the clientError() helper
+		return
+	}
+	w.Write([]byte("Create a new snippet..."))
+}
+```
+
+When run:
+
+```
+INFO	2023/05/19 11:11:32 Starting server on :4000
+ERROR	2023/05/19 11:11:38 /home/yehtet/Documents/code/snippetbox/cmd/web/handlers.go:24: open ./ui/html/pages/home.tmpl.html: no such file or directory
+ERROR	2023/05/19 11:11:38 /home/yehtet/Documents/code/snippetbox/cmd/web/helpers.go:11: open ./ui/html/pages/home.tmpl.html: no such file or directory
+goroutine 19 [running]:
+runtime/debug.Stack()
+	/usr/local/go/src/runtime/debug/stack.go:24 +0x65
+main.(*application).serverError(0xc000098d20, {0x815490, 0xc00018e000}, {0x812f60?, 0xc0000746f0?})
+	/home/yehtet/Documents/code/snippetbox/cmd/web/helpers.go:10 +0x66
+main.(*application).home(0xc000098d20, {0x815490?, 0xc00018e000}, 0x4f5cc9?)
+	/home/yehtet/Documents/code/snippetbox/cmd/web/handlers.go:25 +0x229
+net/http.HandlerFunc.ServeHTTP(0xc0000fa080?, {0x815490?, 0xc00018e000?}, 0x40f06a?)
+	/usr/local/go/src/net/http/server.go:2122 +0x2f
+net/http.(*ServeMux).ServeHTTP(0x0?, {0x815490, 0xc00018e000}, 0xc000078000)
+	/usr/local/go/src/net/http/server.go:2500 +0x149
+net/http.serverHandler.ServeHTTP({0xc000074030?}, {0x815490, 0xc00018e000}, 0xc000078000)
+	/usr/local/go/src/net/http/server.go:2936 +0x316
+net/http.(*conn).serve(0xc0000fe000, {0x8156b8, 0xc00009b080})
+	/usr/local/go/src/net/http/server.go:1995 +0x612
+created by net/http.(*Server).Serve
+	/usr/local/go/src/net/http/server.go:3089 +0x5ed
+```
+
+You can use logger's `Output()` function and set the frame depth to 2 which will show one step back in the stack trace.
+
+cmd/web/helpers.go
+
+```
+...
+func (app *application) serverError(w http.ResponseWriter, err error) {
+	trace := fmt.Sprintf("%s\n%s", err.Error(), debug.Stack())
+	// app.errorLog.Print(trace)
+	app.errorLog.Output(2, trace)
+
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+}
+...
+```
