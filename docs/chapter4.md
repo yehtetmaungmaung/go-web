@@ -279,3 +279,239 @@ value if you don't need it. Like so:
 _, err := m.DB.Exec("INSERT INTO ." ...)
 ```
 
+## Using the model in our handlers
+
+```
+func (app *application) snippetCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		app.clientError(w, http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Create some variables holding dummy data. We will remove these later on.
+	title := "0 snail"
+	content := "0 snaill\nClimb Mount fuji,\nBut slowly, slowly!\n\n- Kobayashi Issa"
+	expires := 7
+
+	// Pass the data to the SnippetModel.Insert() method, receiving the
+	// Id of the new recored back.
+	id, err := app.snippet.Insert(title, content, expires)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	// Redirect the user to the relevant page for the snippet.
+	http.Redirect(w, r, fmt.Sprintf("/snippet/view?id=%d", id), http.StatusSeeOther)
+}
+```
+
+```
+$ curl -iL -X POST http://localhost:4000/snippet/create
+HTTP/1.1 303 See Other
+Location: /snippet/view?id=6
+Date: Sat, 20 May 2023 07:12:46 GMT
+Content-Length: 0
+
+HTTP/1.1 200 OK
+Date: Sat, 20 May 2023 07:12:46 GMT
+Content-Length: 36
+Content-Type: text/plain; charset=utf-8
+
+Display a specific snippet with ID 4
+```
+
+We've just sent a HTTP request which triggered our `snippetCreate` handler, which
+in turn called our `SnippetModel.Insert()` method. This inserted a new record in
+the database and return the ID of this new record. Our handler then issued a
+redirect to another URL with the ID as a query string paramter.
+
+## Placeholder parameters `` ? ``
+
+The reason for using placeholder parameters to construct our query (rather than
+string interpolation) is to help avoid SQL injection attacks from any untrusted
+user-provided input.
+
+Behind the scenes, the `DB.Exec()` method works in three steps:
+
+- It creates a new [prepared statement](https://en.wikipedia.org/wiki/Prepared_statement)
+on the database using the provided SQL statement. The database parses and compiles
+the statement, then stores it ready for execution.
+
+- In a second separate stop, `Exec()` passes the parameter values to the database.
+The database then executes the prepared statement using these parameters. Because
+the parameters are transmitted later, after the statement has been compiled, the
+database treats them as pure data. They can't change the *intent* of the statement.
+ So long as the original statement is not derived from an untrusted data, injection
+ cannnot occur.
+
+ - It then closes (or deallocates) the prepared statement on the database.
+ > placeholder parameter syntax differs depending on your database.
+
+ ## Single-record SQL queries
+
+ ```
+ SELECT id, title, content, created, expires FROM snippets
+WHERE expires > UTC_TIMESTAMP() AND id = ?
+```
+Because our `snippets` table uses the `id` column as its primay key, this query
+will only ever return one database row (or none at all). The query also includes
+a check on the expiry time so that we don't return any snippets that have expired.
+
+```
+// internal/models/snippets.go
+
+func (m *SnippetModel) Get(id int) (*Snippet, error) {
+	// Write the SQL statement we want to execute.
+	stmt := `SELECT id, title, content, created, expires FROM snippets
+			WHERE expires > UTC_TIMESTAMP() AND id = ?`
+
+	// Use the QueryRow() method on the connection pool to execute our SQL
+	// statement, passing in the untrusted id variable as the value for the
+	// placeholder parameter. This returns a pointer to sql.Row object which
+	// holds the results from the database.
+
+	row := m.DB.QueryRow(stmt, id)
+
+	// Initialize a pointer to a new zeroed Snipped struct.
+	s := &Snippet{}
+
+	err := row.Scan(&s.ID, &s.Title, &s.Content, &s.Created, &s.Expires)
+	if err != nil {
+		// If the query returns no rows, then row.Scan() will return a
+		// sql.ErrNoRows error. We use the error.Is() function check for that
+		// error specifically, and return our own ErrNoRecord error instead
+		// (we'll create this in a moment)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNoRecord
+		} else {
+			return nil, err
+		}
+	}
+
+	// IF everything went OK then return the Snippet object.
+	return s, nil
+}
+```
+Behind the scenes of `rows.Scan()` your driver will automatically convert the
+raw output from the SQL database to the required native Go types. So long as
+you're sensible with the types that you're mapping between SQL and Go. these
+conversions should generally Just Work.
+
+- CHAR , VARCHAR and TEXT map to string .
+- BOOLEAN maps to bool .
+- INT maps to int ; BIGINT maps to int64 .
+- DECIMAL and NUMERIC map to float .
+- TIME , DATE and TIMESTAMP map to time.Time .
+
+> **Note:**  A quirk of our MySQL driver is that we need to use the `parseTime=true`
+parameter in our DSN to force it to convert `TIME` and `DATE` fields to `time.Time`.
+Otherwise it returns these as `[]byte` objects. This is one of the many [driver-specific 
+parameters](https://github.com/go-sql-driver/mysql#parameters) that it offers.
+
+```
+// internal/models/errors.go
+
+package models
+
+import (
+	"errors"
+)
+
+var ErrNoRecord = errors.New("models: no matching record found")
+```
+
+You might be wondering why we're returning the `ErrNoRecord` error from our
+`SnippetModel.Get()` method, instead of `sql.ErrNoRows` directly. The reason is 
+to help encapsulate the model completely, so that our application isn't concerned
+with the underlying datastore or reliant on datastore-specific errors for its
+behavior.
+
+## Using the model in our handlers
+
+```
+// cmd/web/handlers.go
+
+func (app *application) snippetView(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil || id < 1 {
+		app.notFound(w)
+		return
+	}
+
+	// Use the SnippetModel object's Get method to retrieve the data for a
+	// specific record based on its ID. If no matching record is found,
+	// return a 404 Not Found Response.
+	snippet, err := app.snippet.Get(id)
+	if err != nil {
+		// that's why we imported model
+		if errors.Is(err, models.ErrNoRecord) {
+			app.notFound(w)
+		} else {
+			app.serverError(w, err)
+		}
+		return
+	}
+
+	// Write the snippet data as a plain-text HTTP response.
+	fmt.Fprintf(w, "%v", snippet)
+
+}
+```
+
+## Checking for specific errors
+
+From Go 1.13 forward, it's now safer and best practice to use the `errors.Is()`
+function instead of the equality operator `==` to perform the check.
+```
+if err == models.ErrNoRecord {
+app.notFound(w)
+} else {
+app.serverError(w, err)
+}
+
+if errors.Is(err, models.ErrNoRecord) {
+app.notFound(w)
+} else {
+app.serverError(w, err)
+}
+```
+
+This is because Go 1.13 introduced the ability to add additional information to errors by
+[wrapping them](https://go.dev/blog/go1.13-errors#wrapping-errors-with-w). If an error happens to get wrapped, a entirely new error value is created —
+which in turn means that it’s not possible to check the value of the original underlying error
+using the regular `==` equality operator.
+In contrast, the `errors.Is()` function works by unwrapping errors as necessary before
+checking for a match.
+Basically, if you are running Go 1.13 or newer, prefer to use `errors.Is()` . It’s a sensible way
+to future-proof your code and prevent bugs caused by you — or any packages that your code
+imports — deciding to wrap errors in the future.
+There is also another function, `errors.As()` which you can use to check if a (potentially
+wrapped) error has a specific type
+
+## Shorthand single-record queries
+
+I’ve deliberately made the code in `SnippetModel.Get()` slightly long-winded to help clarify
+and emphasize what is going on behind-the-scenes of your code. In practice, you can shorten the code slightly by leveraging the fact that errors from
+`DB.QueryRow()` are deferred until `Scan()` is called. It makes no functional difference, but if
+you want it’s perfectly OK to re-write the code to look something like this:
+
+```
+func (m *SnippetModel) Get(id int) (*Snippet, error) {
+	s := &Snippet{}
+
+	err := m.DB.QueryRow("SELECT ...", id).Scan(&s.ID, &s.Title, &s.Content, &s.Created, &s.Expires)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNoRecordd
+		} else {
+			return nil, err
+		}
+	}
+
+	return s, nil
+}
+```
+
+

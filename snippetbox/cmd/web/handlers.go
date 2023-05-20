@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 	"strconv"
+
+	"snippetbox.yehtet.net/snippetbox/internal/models"
 )
 
 func (app *application) home(w http.ResponseWriter, r *http.Request) {
@@ -35,32 +38,52 @@ func (app *application) home(w http.ResponseWriter, r *http.Request) {
 
 // Add a snippetView handler function
 func (app *application) snippetView(w http.ResponseWriter, r *http.Request) {
-	// Extract the value of the id parameter from the query string and try to
-	// convert it to an integer using the strconv.Atoi() function. If it can't
-	// be converted to an integer, or the value is less than 1, we return a 404
-	// page not found response.
 	id, err := strconv.Atoi(r.URL.Query().Get("id"))
 	if err != nil || id < 1 {
 		app.notFound(w)
 		return
 	}
-	// Use fmt.Fprintf() function to interpolate the id value with our
-	// response and write it to the http.ResponseWriter.
-	fmt.Fprintf(w, "Display a specific snippet with ID %d", id)
+
+	// Use the SnippetModel object's Get method to retrieve the data for a
+	// specific record based on its ID. If no matching record is found,
+	// return a 404 Not Found Response.
+	snippet, err := app.snippet.Get(id)
+	if err != nil {
+		// that's why we imported model
+		if errors.Is(err, models.ErrNoRecord) {
+			app.notFound(w)
+		} else {
+			app.serverError(w, err)
+		}
+		return
+	}
+
+	// Write the snippet data as a plain-text HTTP response.
+	fmt.Fprintf(w, "%v", snippet)
+
 }
 
 // Add a snippetCreate handler function
 func (app *application) snippetCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		// If it's not, use the w.WriteHeader() method to send a 405 status
-		// code and the w.Write() method to write a "Method Not Allowed"
-		// response body. We then return from the function so that
-		// subsequent code is not executed.
 		w.Header().Set("Allow", http.MethodPost)
-		// w.WriteHeader(405)
-		// w.Write([]byte("Method Not Allowed"))
 		app.clientError(w, http.StatusMethodNotAllowed)
 		return
 	}
-	w.Write([]byte("Create a new snippet..."))
+
+	// Create some variables holding dummy data. We will remove these later on.
+	title := "0 snail"
+	content := "0 snaill\nClimb Mount fuji,\nBut slowly, slowly!\n\n- Kobayashi Issa"
+	expires := 7
+
+	// Pass the data to the SnippetModel.Insert() method, receiving the
+	// Id of the new recored back.
+	id, err := app.snippet.Insert(title, content, expires)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	// Redirect the user to the relevant page for the snippet.
+	http.Redirect(w, r, fmt.Sprintf("/snippet/view?id=%d", id), http.StatusSeeOther)
 }
