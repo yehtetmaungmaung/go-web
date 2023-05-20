@@ -3,7 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
-	"html/template"
+
+	// "html/template"
 	"net/http"
 	"strconv"
 
@@ -16,24 +17,34 @@ func (app *application) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	files := []string{
-		"./ui/html/base.tmpl.html",
-		"./ui/html/partials/nav.tmpl.html",
-		"./ui/html/pages/home.tmpl.html",
-	}
-
-	ts, err := template.ParseFiles(files...)
+	snippets, err := app.snippets.Latest()
 	if err != nil {
-		app.errorLog.Printf(err.Error())
 		app.serverError(w, err)
 		return
 	}
 
-	err = ts.ExecuteTemplate(w, "base", nil)
-	if err != nil {
-		app.errorLog.Print(err.Error())
-		app.serverError(w, err)
+	for _, snippet := range snippets {
+		fmt.Fprintf(w, "%+v\n", snippet)
 	}
+
+	// files := []string{
+	// 	"./ui/html/base.tmpl.html",
+	// 	"./ui/html/partials/nav.tmpl.html",
+	// 	"./ui/html/pages/home.tmpl.html",
+	// }
+	//
+	// ts, err := template.ParseFiles(files...)
+	// if err != nil {
+	// 	app.errorLog.Printf(err.Error())
+	// 	app.serverError(w, err)
+	// 	return
+	// }
+	//
+	// err = ts.ExecuteTemplate(w, "base", nil)
+	// if err != nil {
+	// 	app.errorLog.Print(err.Error())
+	// 	app.serverError(w, err)
+	// }
 }
 
 // Add a snippetView handler function
@@ -47,7 +58,7 @@ func (app *application) snippetView(w http.ResponseWriter, r *http.Request) {
 	// Use the SnippetModel object's Get method to retrieve the data for a
 	// specific record based on its ID. If no matching record is found,
 	// return a 404 Not Found Response.
-	snippet, err := app.snippet.Get(id)
+	snippet, err := app.snippets.Get(id)
 	if err != nil {
 		// that's why we imported model
 		if errors.Is(err, models.ErrNoRecord) {
@@ -78,7 +89,7 @@ func (app *application) snippetCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Pass the data to the SnippetModel.Insert() method, receiving the
 	// Id of the new recored back.
-	id, err := app.snippet.Insert(title, content, expires)
+	id, err := app.snippets.Insert(title, content, expires)
 	if err != nil {
 		app.serverError(w, err)
 		return

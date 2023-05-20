@@ -14,7 +14,7 @@ import (
 type application struct {
 	errorLog *log.Logger
 	infoLog  *log.Logger
-	snippet  *models.SnippetModel
+	snippets *models.SnippetModel
 }
 
 func main() {
@@ -46,7 +46,7 @@ func main() {
 	app := &application{
 		errorLog: errorLog,
 		infoLog:  infoLog,
-		snippet:  &models.SnippetModel{DB: db},
+		snippets: &models.SnippetModel{DB: db},
 	}
 
 	srv := &http.Server{
