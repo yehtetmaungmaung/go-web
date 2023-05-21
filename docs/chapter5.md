@@ -1,7 +1,10 @@
 # Displaying dynamic data
-> [This is war. We fight one battle, and then we fight another one until it's done.](https://www.youtube.com/watch?v=DazhkXUHyGI)
 
 Day 6, May 21 2023
+
+> [This is war. We fight one battle, and then we fight another one until it's done.](https://www.youtube.com/watch?v=DazhkXUHyGI)
+
+
 ```
 // cd/web/handlers.go
 
@@ -391,4 +394,182 @@ Within a `{{range}}` action you can use the `{{break}}` command to end the loop 
     {{end}}
     // ...
 {{end}}
+```
+
+## Caching templates
+
+There are two main issues at the moment:
+1. Each and every time we render a web page, our application reads and parses the relevant
+template files using the `template.ParseFiles()` function. We could avoid this duplicated
+work by parsing the files once — when starting the application — and storing the parsed
+templates in an in-memory cache.
+2. There’s duplicated code in the `home` and `snippetView` handlers, and we could reduce this
+duplication by creating a helper function.
+
+Let's create an in-memory map with the type `map[string]*template.Template` to cache
+the parsed templates. Update `cmd/web/templates.go`:
+
+```
+func newTemplateCache() (map[string]*template.Template, error) {
+	// Initialize a new map to act as the cache.
+	cache := map[string]*template.Template{}
+
+	// Use the filepath.Glob() function to get a slice of all filepaths that
+	// match the pattern.
+	pages, err := filepath.Glob("./ui/html/pages/*.tmpl.html")
+	if err != nil {
+		return nil, err
+	}
+
+	// Loop through the page filepaths one-by-one.
+	for _, page := range pages {
+		// Extract the file name (like 'home.tmpl.html') from the full filepath
+		// and assign it to the name variable.
+		name := filepath.Base(page)
+
+		// Create a slice containing filepaths for our base template, any partial
+		// and the page.
+		files := []string{
+			"./ui/html/base.tmpl",
+			"./ui/html/partials/nav.tmpl",
+			page,
+		}
+
+		// Parse the files into a template set.
+		ts, err := template.ParseFiles(files...)
+		if err != nil {
+			return nil, err
+		}
+
+		// Add the template set to the map, using the name of the page
+		// (like 'home.tmpl.html') as the key.
+		cache[name] = ts
+	}
+
+	// Return the map
+	return cache, nil
+
+}
+```
+
+The next step is to initialize this cache in the `main()` function and make it available to our
+handlers as a dependency via the `application` struct, like this:
+
+```
+func main() {
+	addr := flag.String("addr", ":4000", "HTTP network address")
+
+	// Define a new command-line flag for the MySQL DSN string.
+	dsn := flag.String("dsn", "web:frontiir@tcp(172.16.251.171:9999)/snippetbox?parseTime=true",
+		"MySQL data source name")
+
+	flag.Parse()
+
+	infoLog := log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime)
+	errorLog := log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Llongfile)
+
+	db, err := openDB(*dsn)
+	if err != nil {
+		errorLog.Fatal(err)
+	}
+
+	// Close closes the database and prevents new queries from starting. Close
+	// then waits for all queries that have started processing on the server to
+	// finish. It is rare to Close a DB, as the DB handle is meant to be
+	// long-lived and shared between many goroutines.
+
+	// Defer a call to db.Close(), so that the connection pool is closed before
+	// the main() function exists.
+	defer db.Close()
+
+	// Initialize a new template cache...
+	templateCache, err := newTemplateCache()
+	if err != nil {
+		errorLog.Fatal(err)
+	}
+
+	app := &application{
+		errorLog: errorLog,
+		infoLog:  infoLog,
+		snippets: &models.SnippetModel{DB: db},
+		templateCache: templateCache,
+	}
+...
+```
+So, at this point, we’ve got an in-memory cache of the relevant template set for each of our
+pages, and our handlers have access to this cache via the `application` struct.
+
+Let’s now tackle the second issue of duplicated code, and create a helper method so that we
+can easily render the templates from the cache.
+Open up your `cmd/web/helpers.go` file and add the following `render()` method:
+
+```
+func (app *application) render(w http.ResponseWriter, status int, page string, data *templateData) {
+	// Retrieve the appropriate template set from the cache based on the page
+	// name (like 'home.tmpl.html'). If no entry exists in the cache with the
+	// provided name, then create a new error and call the serverError() helper
+	// method that we made earlier and return.
+	ts, ok := app.templateCache[page]
+	if !ok {
+		err := fmt.Errorf("The template %s does not exist", page)
+		app.serverError(w, err)
+		return
+	}
+
+	// Write out the provided HTTP status code
+	w.WriteHeader(status)
+
+	// Execute the template set and write the response body.
+	err := ts.ExecuteTemplate(w, "base", data)
+	if err != nil {
+		app.serverError(w, err)
+	}
+}
+```
+
+Now update the `cmd/web/handlers.go`:
+
+```
+func (app *application) home(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		app.notFound(w)
+		return
+	}
+
+	snippets, err := app.snippets.Latest()
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	// Use the new render helper.
+	app.render(w, http.StatusOK, "home.tmpl.html", &templateData{Snippets: snippets})
+
+}
+
+// Add a snippetView handler function
+func (app *application) snippetView(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil || id < 1 {
+		app.notFound(w)
+		return
+	}
+
+	// Use the SnippetModel object's Get method to retrieve the data for a
+	// specific record based on its ID. If no matching record is found,
+	// return a 404 Not Found Response.
+	snippet, err := app.snippets.Get(id)
+	if err != nil {
+		// that's why we imported model
+		if errors.Is(err, models.ErrNoRecord) {
+			app.notFound(w)
+		} else {
+			app.serverError(w, err)
+		}
+		return
+	}
+
+	app.render(w, http.StatusOK, "view.tmpl.htm", &templateData{Snippet: snippet})
+
+}
 ```
