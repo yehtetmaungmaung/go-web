@@ -619,4 +619,264 @@ func newTemplateCache() (map[string]*template.Template, error) {
 		// Add the template set to the map as normal...
 		cache[name] = ts
 	}
-    ```
+}
+```
+
+ ## Catching runtime errors
+
+As soon as we begin adding dynamic behavior to our HTML templates there’s a risk of
+encountering runtime errors.
+
+Let’s add a deliberate error to the `view.tmpl.html` template and see what happens:
+
+```
+{{define "title"}}Snippet #{{.Snippet.ID}}{{end}}
+
+{{define "main"}}
+    <div class='snippet'>
+        <div class='metadata'>
+            <strong>{{.Snippet.Title}}</strong>
+            <span>#{{.Snippet.ID}}</span>
+        </div>
+        {{len nil}} <!-- deliberate error to catch runtime-error-->
+        <pre><code>{{.Snippet.Content}}</code></pre>
+        <div class='metadata'>
+            <time>Created: {{.Snippet.Created}}</time>
+            <time>Expires: {{.Snippet.Expires}}</time>
+        </div>
+    </div>
+{{end}}
+```
+
+> `nil` does not have a length.
+
+```
+$ curl -iL http://localhost:4000/snippet/view?id=1
+HTTP/1.1 200 OK
+Date: Sun, 21 May 2023 11:15:59 GMT
+Content-Length: 687
+Content-Type: text/html; charset=utf-8
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Snippet #1 - Snippetbox</title>
+    
+    <link rel='stylesheet' href='/static/css/main.css'>
+    <link rel='shortcut icon' href='/static/img/favicon.ico' type='image/x-icon'>
+    
+    <link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700'>
+</head>
+<body>
+    <header>
+        <h1><a href="/">Snippetbox</a></h1>
+    </header>
+    
+    
+<nav>
+    <a href="/">Home</a>
+</nav>
+
+    <main>
+        
+    <div class='snippet'>
+        <div class='metadata'>
+            <strong>An old silent pond</strong>
+            <span>#1</span>
+        </div>
+        Internal Server Error
+```
+
+This is pretty bad. Our application has thrown an error, but the user has wrongly been sent a
+200 OK response. And even worse, they’ve received a half-complete HTML page.
+
+To fix this we need to make the template render a two-stage process. First, we should make a
+‘trial’ render by writing the template into a buffer. If this fails, we can respond to the user with
+an error message. But if it works, we can then write the contents of the buffer to our
+`http.ResponseWriter`.
+
+Let’s update the render() helper to use this approach instead:
+
+```
+func (app *application) render(w http.ResponseWriter, status int, page string, data *templateData) {
+	ts, ok := app.templateCache[page]
+	if !ok {
+		err := fmt.Errorf("the template %s does not exist", page)
+		app.serverError(w, err)
+		return
+	}
+
+	// Initialize a new buffer
+	buf := new(bytes.Buffer)
+
+	// Write the template to the buffer, instead of straight to the
+	// http.ResponseWriter. If there's an error, call our serverError() helper
+	// and then return.
+	err := ts.ExecuteTemplate(buf, "base", data)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	// If the template is written to the buffer without any errors, we are safe
+	// to go ahead and write the HTTP status code to http.ResponseWriter.
+	w.WriteHeader(status)
+
+	// Write the contents of the buffer to the http.ResponseWriter. Note: this
+	// is another time where we pass our http.ResponseWriter to a function that
+	// takes an io.Writer.
+	buf.WriteTo(w)
+}
+```
+
+```
+$ curl -iL http://localhost:4000/snippet/view?id=1
+HTTP/1.1 500 Internal Server Error
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+Date: Sun, 21 May 2023 11:43:00 GMT
+Content-Length: 22
+
+Internal Server Error
+```
+
+**Note:** Don't forget to remove deliberated error we inserted in `view.tmpl.html`.
+
+
+## Common dynamic data
+
+In some web applications there may be common dynamic data that you want to include on
+more than one — or even every — webpage. For example, you might want to include the
+name and profile picture of the current user, or a CSRF token in all pages with forms.
+
+
+In our case let’s begin with something simple, and say that we want to include the current
+year in the footer on every page.
+
+
+To do this we’ll begin by adding a new `CurrentYear` field to the `templateData` struct, like so:
+
+```
+...
+
+// Add a CurrentYear field to the templateData struct.
+type templateData struct {
+	CurrentYear int
+	Snippet     *models.Snippet
+	Snippets    []*models.Snippet
+}
+
+...
+```
+
+The next step is to add a `newTemplateData()` helper method to our application, which will
+return a t`emplateData` struct initialized with the current year.
+
+```
+...
+
+// Create a newTemplateData() helper, which returns a pointer to a templateData
+// struct initialized with the current year. Note that we're not using the
+// *http.Request parameter here at the moment, but we'll do later in the book.
+func (app *application) newTemplateData(r *http.Request) *templateData {
+	return &templateData{
+		CurrentYear: time.Now().Year(),
+	}
+}
+
+...
+```
+
+Let's update our `home` and `snippetView` handlers to use the `newTemplateData()` helper,
+like so:
+
+```
+func (app *application) home(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		app.notFound(w)
+		return
+	}
+
+	snippets, err := app.snippets.Latest()
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	// Call the newTemplateData() helper to get a templateData struct containing
+	// the 'default' data (which for now is just the current year), and addthe
+	// snippets slice to it.
+	data := app.newTemplateData(r)
+	data.Snippets = snippets
+
+	// Pass the data to the render() helper as normal.
+	app.render(w, http.StatusOK, "home.tmpl.html", data)
+
+}
+
+// Add a snippetView handler function
+func (app *application) snippetView(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil || id < 1 {
+		app.notFound(w)
+		return
+	}
+
+	// Use the SnippetModel object's Get method to retrieve the data for a
+	// specific record based on its ID. If no matching record is found,
+	// return a 404 Not Found Response.
+	snippet, err := app.snippets.Get(id)
+	if err != nil {
+		// that's why we imported model
+		if errors.Is(err, models.ErrNoRecord) {
+			app.notFound(w)
+		} else {
+			app.serverError(w, err)
+		}
+		return
+	}
+
+	// And do the same thing again here...
+	data := app.newTemplateData(r)
+	data.Snippet = snippet
+
+	app.render(w, http.StatusOK, "view.tmpl.html", data)
+
+}
+```
+
+And update `ui/html/base.tmpl.html` file to display the year in the footer, like so:
+
+```
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{template "title" .}} - Snippetbox</title>
+    <!-- Link to the CSS stylesheet and favicon -->
+    <link rel='stylesheet' href='/static/css/main.css'>
+    <link rel='shortcut icon' href='/static/img/favicon.ico' type='image/x-icon'>
+    <!-- Also link to some fonts hosted by Google -->
+    <link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700'>
+</head>
+<body>
+    <header>
+        <h1><a href="/">Snippetbox</a></h1>
+    </header>
+    <!-- invoke the navigation template -->
+    {{template "nav" .}}
+    <main>
+        {{template "main" .}}
+    </main>
+    <footer>
+        <!-- Update the footer to include the current year -->
+        Powered by <a href="https://golang.org/">Go</a> in {{.CurrentYear}}
+    </footer>
+    <script src="/static/js/main.js" type="text/javascript"></script>
+</body>
+</html>
+{{end}}
+```
