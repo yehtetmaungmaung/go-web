@@ -1,7 +1,9 @@
 # Displaying dynamic data
+> [This is war. We fight one battle, and then we fight another one until it's done.](https://www.youtube.com/watch?v=DazhkXUHyGI)
 
+Day 6, May 21 2023
 ```
-/ cd/web/handlers.go
+// cd/web/handlers.go
 
 // Add a snippetView handler function
 func (app *application) snippetView(w http.ResponseWriter, r *http.Request) {
@@ -268,3 +270,125 @@ The final row is an example of declaring a template variable. Template variables
 particularly useful if you want to store the result from a function and use it in multiple places
 in your template. Variable names must be prefixed by a dollar sign and can contain
 alphanumeric characters only.
+
+## Using the if and range actions
+
+Update `/cmd/web/templates.go`:
+```
+package main
+
+import "snippetbox.yehtet.net/snippetbox/internal/models"
+
+// Include a Snippets field.
+type templateData struct {
+	Snippet  *models.Snippet
+	Snippets []*models.Snippet
+}
+```
+
+Update `cmd/web/handler.go`:
+```
+func (app *application) home(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		app.notFound(w)
+		return
+	}
+
+	snippets, err := app.snippets.Latest()
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	files := []string{
+		"./ui/html/base.tmpl.html",
+		"./ui/html/partials/nav.tmpl.html",
+		"./ui/html/pages/home.tmpl.html",
+	}
+
+	ts, err := template.ParseFiles(files...)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	// Create an instance of a templateData struct holding the slice of snippets
+	data := &templateData{
+		Snippets: snippets,
+	}
+
+	// Pass in the templateData struct when executing the template.
+	err = ts.ExecuteTemplate(w, "base", data)
+	if err != nil {
+		app.serverError(w, err)
+	}
+
+}
+```
+
+Update `ui/html/pages/home.tmpl.html`:
+
+```
+{{define "title"}}Home{{end}}
+
+{{define "main"}}
+    <h2>Latest snippets</h2>
+    {{if .Snippets}}
+        <table>
+            <tr>
+                <th>Title</th>
+                <th>Created</th>
+                <th>Id</th>
+            </tr>
+            {{range .Snippets}}
+            <tr>
+                <td><a href="/snippet/view?id={{.ID}}">{{.Title}}</a></td>
+                <td>{{.Created}}</td>
+                <td>#{{.ID}}</td>
+            </tr>
+            {{end}}
+        </table>
+    {{else}}
+        <p>There's nothing to see here... yet!</p>
+    {{end}}
+{{end}}
+```
+
+## Combining functions
+
+It’s possible to combine multiple functions in your template tags, using the parentheses `()` to
+surround the functions and their arguments as necessary.
+For example, the following tag will render the content C1 if the length of `Foo` is greater than
+99:
+```
+{{if (gt (len .Foo) 99)}} C1 {{end}}
+```
+Or as another example, the following tag will render the content `C1` if `.Foo` equals 1 and `.Bar`
+is less than or equal to 20:
+```
+{{if (and (eq .Foo 1) (le .Bar 20))}} C1 {{end}}
+```
+
+## Controlling loop behavior
+
+Within a `{{range}}` action you can use the `{{break}}` command to end the loop early, and
+`{{continue}}` to immediately start the next loop iteration.
+
+```
+{{range .Foo}}
+    // Skip this iteration if the .ID value equals 99.
+    {{if eq .ID 99}}
+        {{continue}}
+    {{end}}
+    // ...
+{{end}}
+
+
+{{range .Foo}}
+    // End the loop if the .ID value equals 99.
+    {{if eq .ID 99}}
+        {{break}}
+    {{end}}
+    // ...
+{{end}}
+```
