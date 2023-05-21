@@ -602,3 +602,99 @@ func (app *application) home(w http.ResponseWriter, r *http.Request) {
 	}
 }
 ```
+
+## The `database/sql` package
+
+the `database/sql` package essentially provides a
+standard interface between your Go application and the world of SQL databases.
+So long as you use `the database/sql` package, the Go code you write will generally be
+portable and will work with any kind of SQL database — whether it’s `MySQL`, `PostgreSQL`,
+`SQLite` or something else. This means that your application isn’t so tightly coupled to the
+database that you’re currently using, and the theory is that you can swap databases in the
+future without re-writing all of your code (driver-specific quirks and SQL implementations
+aside).
+It’s important to note that while database/sql generally does a good job of providing a
+standard interface for working with SQL databases, there are some idiosyncrasies in the way
+that different drivers and databases operate. It’s always a good idea to read over the
+documentation for a new driver to understand any quirks and edge cases before you begin
+using it.
+
+## Managing null values
+One thing that Go doesn’t do very well is managing NULL values in database records. Let’s pretend that the title column in our `snippets` table contains a `NULL` value in a
+particular row. If we queried that row, then `rows.Scan()` would return an error because it
+can’t convert `NULL` into a `string`:
+
+```
+sql: Scan error on column index 1: unsupported Scan, storing driver.Value type
+<nil>; into type *string
+```
+
+Very roughly, the fix for this is to change the field that you’re are scanning into from a `string`
+to a `sql.NullString` type. See this [gist](https://gist.github.com/alexedwards/dc3145c8e2e6d2fd6cd9) for a working example.
+But, as a rule, the easiest thing to do is simply avoid `NULL` values altogether. Set `NOT NULL`
+constraints on all your database columns, like we have done in this book, along with sensible
+`DEFAULT` values as necessary.
+
+## Working with transactions
+
+It’s important to realize that calls to Exec() , Query() and QueryRow() can use any connection
+from the sql.DB pool. Even if you have two calls to Exec() immediately next to each other in
+your code, there is no guarantee that they will use the same database connection.
+Sometimes this isn’t acceptable. For instance, if you lock a table with MySQL’s LOCK TABLES
+command you must call UNLOCK TABLES on exactly the same connection to avoid a deadlock.
+To guarantee that the same connection is used you can wrap multiple statements in a
+transaction. Here’s the basic pattern:
+
+```
+type ExampleModel struct {
+	DB *sql.DB
+}
+
+func (m *ExampleModel) ExampleTransaction() error {
+	// Calling the Begin() method on the connection pool creates a new sq.Tx object
+	// which represents the in-progress database transaction.
+
+	tx, err := m.DB.Begin()
+	if err != nil {
+		return err
+	}
+
+	// Defer a call to tx.Rollback() to ensure it is always before the function
+	// returns. If the transaction succeeds, it will be already committed by the
+	// time tx.Rollback() is called, making tx.Rollback() a no-op. Otherwise, in
+	// the event of an error, tx.Rollback() will rollback the changes before
+	// the function returns.
+	defer tx.Rollback()
+
+	// Call Exec() on the transaction, passing in your statement and any
+	// parameters. It's important to notice that tx.Exec() is called on the 
+	// transactioin object just created, NOT the connection pool. Although we're
+	// using tx.Exec() here, you can also use tx.Query() and tx.QueryRow() in 
+	// exactly the same way.
+	_, err = tx.Exec("INSERT INTO ...")
+	if err != nil {
+		return err
+	}
+
+	// Carry out another query in exactly the same way.
+	_, err = tx.Exec("UPDATE ...")
+	if err != nil {
+		return err
+	}
+
+	// If there are no errors, the statements in the transaction can be commited
+	// to the database with the tx.Commit() method.
+	err = tx.Commit()
+	return err
+}
+```
+
+> **Important:** You must *always*call either `Rollback()` or `Commit()` before
+your function returns. If you don't, the connection will stay open and not be 
+returned to the connection pool. This can lead to hitting your maximum connnection
+limit/running out of resources. The simplest way to avoid thsi is to use `defer 
+tx.Rollback()` like we are in the example above.
+
+## Prepared statements
+
+To be filled with text. I might do it later. Read Page 129.
