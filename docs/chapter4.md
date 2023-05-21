@@ -689,7 +689,7 @@ func (m *ExampleModel) ExampleTransaction() error {
 }
 ```
 
-> **Important:** You must *always*call either `Rollback()` or `Commit()` before
+> **Important:** You must *always* call either `Rollback()` or `Commit()` before
 your function returns. If you don't, the connection will stay open and not be 
 returned to the connection pool. This can lead to hitting your maximum connnection
 limit/running out of resources. The simplest way to avoid thsi is to use `defer 

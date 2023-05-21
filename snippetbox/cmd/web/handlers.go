@@ -3,8 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
-
-	// "html/template"
+	"html/template"
 	"net/http"
 	"strconv"
 
@@ -69,8 +68,31 @@ func (app *application) snippetView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write the snippet data as a plain-text HTTP response.
-	fmt.Fprintf(w, "%v", snippet)
+	// Initialize a slice containing the paths to the view.tmpl.html file, plus
+	// the base layout and navigation partial that we made earlier.
+	files := []string{
+		"./ui/html/base.tmpl.html",
+		"./ui/html/partials/nav.tmpl.html",
+		"./ui/html/pages/view.html",
+	}
+
+	//Parse the template files ...
+	ts, err := template.ParseFiles(files...)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	// Create an instance of a templateData struct holding the snippet data
+	data := &templateData{
+		Snippet: snippet,
+	}
+
+	// Pass in the templateData struct when executing the template.
+	err = ts.ExecuteTemplate(w, "base", data)
+	if err != nil {
+		app.serverError(w, err)
+	}
 
 }
 
